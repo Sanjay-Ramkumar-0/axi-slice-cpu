@@ -1,291 +1,177 @@
-# AXI-Slice-CPU
+# AXI-Integrated Lightweight CPU
 
-*A Scalable Slice-Based CPU Core with AXI-Lite Interface*
+**Architecture, Integration, and Verification Exploration**
 
----
+This project explores a lightweight CPU architecture integrated with an AXI-Lite interface, focusing on **system-level design decisions, modular RTL structure, and verification readiness**, rather than raw performance or feature completeness.
 
-## 📌 Overview
-
-This project implements a **custom CPU core** built around a **slice-based ALU architecture**, where the datapath width can be scaled by chaining multiple small ALU slices.
-The CPU supports basic arithmetic, logical, shift, comparison, and population-count operations and is controlled using a **multi-cycle FSM**.
-
-The design is written entirely in **Verilog HDL** and includes:
-
-* A standalone CPU execution path (PC + instruction memory)
-* A scalable, bit-slice ALU
-* A register file
-* FSM-based control
-* Optional **AXI-Lite interface** for SoC integration
-
-This project focuses on **architecture clarity and modularity**, rather than maximum performance.
+The intent is to study how a simple CPU core interacts with its surrounding system and how architectural choices affect **debuggability, integration complexity, and verification effort**.
 
 ---
 
-## 🎯 Design Goals
+## Motivation
 
-* Demonstrate **CPU micro-architecture design**
-* Show how **bit-slice / scalable ALUs** work
-* Separate **datapath and control**
-* Integrate a CPU with **AXI-Lite** in a clean way
-* Keep the design **platform-agnostic**
+The primary motivation for this project was to move beyond isolated datapath design and understand how a CPU core behaves as part of a **larger SoC-style environment**.
 
----
+Instead of optimizing for throughput or instruction richness, this design intentionally prioritizes:
 
-## 🧠 High-Level Architecture
+* architectural clarity,
+* clean separation of control and datapath,
+* explicit visibility into internal state,
+* and realistic system integration using a standard bus interface.
 
-```
-                 +---------------------+
-                 |   Instruction       |
-                 |     Memory          |
-                 +----------+----------+
-                            |
-                            v
-+---------+     +------------+------------+
-|  PC     | --> | Instruction Register   |
-+---------+     +------------+------------+
-                            |
-                            v
-                 +----------+----------+
-                 |   Control FSM        |
-                 +----------+----------+
-                            |
-     +----------------------+----------------------+
-     |                                             |
-     v                                             v
-+------------+                             +----------------+
-| Register   |                             | Slice-Based    |
-| File       |                             | ALU Core       |
-+------------+                             +----------------+
-                                                    |
-                                                    v
-                                            +---------------+
-                                            | Result / Flags|
-                                            +---------------+
-```
+This project was built as a **learning and exploration exercise**, aligned with the kind of trade-offs faced in real CPU and SoC design teams.
 
 ---
 
-## 🧩 Key Modules Explained
+## Architecture Overview
 
-### 1️⃣ `cpu_core_v2`
+At a high level, the design consists of:
 
-Top-level CPU core that connects:
+* A **modular CPU core** with clear boundaries between control logic and datapath
+* A **multi-cycle FSM-based control unit** for deterministic execution and debuggability
+* A **slice-based ALU architecture** enabling scalable datapath width
+* An **AXI-Lite slave interface** for register-level system integration
+* RTL written with **simulation and observability** as first-class concerns
 
-* Program Counter (PC)
-* Instruction Memory
-* Instruction Register
-* Control FSM
-* Register File
-* Slice-based ALU
-
-This module orchestrates instruction execution.
+The architecture intentionally favors **clarity and traceability** over aggressive optimization.
 
 ---
 
-### 2️⃣ Program Counter (`pc.v`)
+## Slice-Based Datapath Design
 
-* Holds the current instruction address
-* Increments when enabled by the FSM
-* Width is parameterized (`PC_W`)
+Rather than implementing a monolithic wide ALU, the datapath is constructed from **multiple small ALU slices** operating in parallel and coordinated through explicit interconnect logic.
 
----
+This approach makes datapath scaling, signal flow, and control interactions easier to reason about.
 
-### 3️⃣ Instruction Memory (`instruction_memory.v`)
+### Input Arranger
 
-* Simple ROM
-* Stores instructions in binary form
-* Used for standalone CPU execution (no AXI needed)
+The input arranger preprocesses operands before they reach the ALU slices.
+It handles alignment and ordering so that slice-based execution works correctly for operations such as:
 
----
+* comparison (MSB-first evaluation),
+* shifts and rotates,
+* multi-slice accumulation.
 
-### 4️⃣ Instruction Register (`instruction_register.v`)
+This avoids embedding ordering assumptions inside individual ALU slices and keeps the slice logic simple.
 
-* Latches the fetched instruction
-* Splits instruction into:
+### Slice Interconnect
 
-  * `opcode`
-  * `rd` (destination register)
-  * `rs1`, `rs2` (source registers)
+The slice interconnect is responsible for coordinating slice-level execution by managing:
 
----
+* carry propagation across slices,
+* shift bit forwarding between slices,
+* accumulation for population count,
+* early-exit behavior for compare operations,
+* concatenation of slice outputs into a unified result.
 
-### 5️⃣ Register File (`reg_file.v`)
-
-* 4 general-purpose registers (R0–R3)
-* Two read ports, one write port
-* Controlled by FSM (`reg_we`)
+Together, the input arranger and slice interconnect allow multiple small ALUs to behave as a single logical datapath.
 
 ---
 
-## 🧠 Slice-Based ALU Architecture (Core Idea)
+## Control and Instruction Flow
 
-Instead of a single wide ALU, the datapath is built using **multiple small ALU slices**.
+The CPU uses a **multi-cycle finite state machine** to control execution.
+This was chosen intentionally to keep control behavior explicit and easy to debug.
 
-Example:
+A typical instruction progresses through:
 
-* Slice width (`S`) = 4 bits
-* Number of slices (`N_A`) = 2
-* Total datapath width = 8 bits
+1. Instruction fetch
+2. Decode
+3. Execute
+4. Writeback
+5. Program counter update
 
-Each slice:
-
-* Operates on `S` bits
-* Communicates with neighboring slices via carry / shift signals
-
-This architecture is inspired by **classic bit-slice processors**.
+While this limits throughput, it significantly simplifies control logic and verification.
 
 ---
 
-## 🔀 Input Arranger (`input_arranger.v`)
+## Why AXI-Lite?
 
-### Why is this needed?
+AXI-Lite was chosen to enable **realistic system integration** without introducing unnecessary protocol complexity.
 
-Some operations (like comparison or shifts) require **processing bits in a different order**.
+* AXI-Lite is commonly used for control and status registers in SoC designs
+* It aligns with industry integration practices
+* It avoids the complexity of full AXI while still exposing real architectural considerations
 
-### What it does:
+The AXI interface does **not directly drive internal CPU registers**.
+Instead, it provides configuration and observation points that the CPU core consumes synchronously.
 
-* Reorders input operands **before** they reach the ALU slices
-* Supports:
-
-  * Normal order (LSB slice first)
-  * Reversed order (MSB slice first)
-
-### Used for:
-
-* Comparison (start checking from MSB)
-* Shift and rotate operations
-* General slice alignment
-
-> Think of it as a **pre-processing stage** for slice-based execution.
+In a production design, this interface would likely be extended, replaced, or complemented depending on bandwidth and latency requirements.
 
 ---
 
-## 🔗 Slice Interconnect (`slice_interconnect.v`)
+## Current Status
 
-This module **connects all ALU slices together**.
+### Implemented
 
-### Responsibilities:
+* CPU core RTL
+* Slice-based ALU and interconnect
+* FSM-controlled instruction execution
+* AXI-Lite slave interface
+* Simulation-ready design with debug visibility
 
-* Carry propagation (for ADD / SUB)
-* Shift bit propagation (left/right)
-* Popcount accumulation
-* Compare early-exit logic
-* Concatenation of slice outputs into final result
+### Not Yet Implemented / Simplified
 
-### Why it is important:
-
-Without this module, each ALU slice would work in isolation.
-The slice interconnect **turns multiple small ALUs into one logical wide ALU**.
-
----
-
-## ⚙️ ALU Operations Supported
-
-| Opcode | Operation | Description                        |
-| ------ | --------- | ---------------------------------- |
-| `000`  | ADD       | Addition (slice-chained carry)     |
-| `001`  | SHIFT     | Logical shift (via slice chaining) |
-| `010`  | POPCOUNT  | Count number of 1s                 |
-| `011`  | COMPARE   | Less / Equal / Greater             |
-
-> The ALU output width scales automatically with number of slices.
+* Pipelining
+* Cache or memory hierarchy
+* Formal verification
+* Full AXI protocol support
+* Performance-oriented optimizations
 
 ---
 
-## 🧾 Instruction Format
+## Verification Approach
 
-Each instruction is **9 bits wide**:
+Verification is currently **simulation-driven**.
 
-```
-[8:6]  opcode
-[5:4]  rd   (destination register)
-[3:2]  rs1  (source register 1)
-[1:0]  rs2  (source register 2)
-```
+The design includes:
 
----
+* Unit-level testbenches for ALU slices
+* Integration-level testbenches for the CPU core
+* Explicit debug outputs to simplify waveform analysis
 
-## 🧠 Control FSM (`control_fsm.v`)
-
-The CPU uses a **multi-cycle FSM**, not a single-cycle design.
-
-### FSM States (example):
-
-| State       | Meaning                       |
-| ----------- | ----------------------------- |
-| `FETCH`     | Fetch instruction from memory |
-| `DECODE`    | Decode opcode & registers     |
-| `EXECUTE`   | Perform ALU operation         |
-| `WRITEBACK` | Write result to register      |
-| `NEXT`      | Increment PC                  |
-
-### Why multi-cycle?
-
-* Simpler control
-* Clear separation of stages
-* Easy to debug and extend
+The RTL was written with future **assertion-based and constrained-random verification** in mind, although these are not yet implemented.
 
 ---
 
-## 🔌 AXI-Lite Interface (Optional)
+## Design Trade-offs & Lessons Learned
 
-The CPU can be wrapped with an **AXI-Lite slave** to allow:
+Key trade-offs explored in this project include:
 
-* Software access to registers
-* External control of execution
-* Integration into SoC designs
+* **Simplicity vs performance**
+  Multi-cycle execution improves clarity at the cost of throughput.
 
-⚠️ AXI does **not directly drive internal CPU registers**.
-It writes configuration registers that the CPU reads synchronously.
+* **Ease of integration vs flexibility**
+  AXI-Lite simplifies control integration but limits bandwidth.
 
----
+* **Modular RTL vs optimized logic depth**
+  Clear module boundaries improve maintainability and verification at the cost of raw efficiency.
 
-## 🧪 Verification Strategy
-
-* **Unit-level testbenches**
-
-  * `tb_alu_slice.v`
-  * `tb_top_simple_cpu.v`
-* **Core-level testbench**
-
-  * `tb_cpu_core_v2.v`
-* AXI verification is intentionally separated for SoC-level testing
+This project reinforced how **architectural decisions propagate into verification complexity, debug strategy, and system-level integration effort**.
 
 ---
 
-## 🛠 Tools Used
+## How to Run
 
-* Verilog HDL
-* Xilinx Vivado
-* XSIM (simulation)
+* Tool: Xilinx Vivado (XSIM)
+* Add RTL files under *Design Sources*
+* Add testbenches under *Simulation Sources*
+* Run behavioral simulation for functional verification
 
----
-
-## 📌 Project Status
-
-* RTL complete
-* Synthesis clean
-* Simulation verified at unit and core level
-* Implementation requires board-specific constraints
+No board-specific constraints are required for simulation.
 
 ---
 
-## 👤 Author
+## Notes
+
+This project is intentionally **not positioned as a production-grade CPU**.
+It is an exploration of **architecture, control, integration, and verification concerns** that arise in real CPU and SoC development environments.
+
+---
+
+### Author
 
 **Sanjay Ramkumar**
-ECE Undergraduate
-Interested in CPU architecture, VLSI, and SoC design
+Electronics and Communication Engineering
+Interest areas: CPU architecture, SoC design, verification, and system integration
 
----
-
-## 📜 License
-
-MIT License
-
----
-
-### ⭐ Final Note
-
-This project is intended as an **educational and architectural exploration**, demonstrating how scalable datapaths, FSM-controlled CPUs, and SoC interfaces can be built from scratch.
-* Write a **“How to run simulation”** section
-* Create a **README-lite** for quick viewers
